@@ -9,6 +9,7 @@ uploads specified directory contents to mail.ru cloud
 - NO subdirectories handling
 - ONLY plain text and zip files TESTED, no contents checking though, only extensions
 - same name files in the cloud will not be replaced (still posted though)
+- NO linux hidden files upload (names starting with dot)
 
 requirements (Python 3.3+):
 pip install requests requests-toolbelt
@@ -26,14 +27,15 @@ import logging
 import requests
 import datetime
 import configparser
-from os import walk, unlink
-from os.path import join, getsize, splitext, basename, abspath, isdir
+from os import walk, unlink, environ
+from os.path import join, getsize, splitext, basename, abspath, isdir, dirname
 from mimetypes import guess_type
 from requests_toolbelt import MultipartEncoder
 from requests.compat import urljoin, quote_plus
 from logging.handlers import RotatingFileHandler
 
 __version__ = '0.0.1'
+
 IS_CONFIG_PRESENT = False # local configuration file presence indicator
 CONFIG_FILE = './.config' # configuration file, will be created on the very first use
 # trying to load local configuration file
@@ -41,6 +43,9 @@ config = configparser.ConfigParser(delimiters=(':'))
 config.optionxform=str
 if config.read(CONFIG_FILE):
     IS_CONFIG_PRESENT = True
+
+# frozen executable check
+IS_FROZEN = getattr(sys, 'frozen', False)
 
 ###----- GENERAL CONFIGURATION PARAMETERS-------###
 # do not forget to accept https://cloud.mail.ru/LA/ before first use by entering the cloud with browser)
@@ -72,6 +77,7 @@ FILES_TO_PRESERVE = ('application/zip', ) # do not archive already zipped files
 QUOTED_LOGIN = quote_plus(LOGIN) # just for convenience
 DEFAULT_FILETYPE = 'text/plain' # 'text/plain' is good option
 FILES_TO_SKIP = set((basename(CONFIG_FILE), basename(LOG_PATH))) # do not upload this files
+CACERT_FILE = 'cacert.pem'
 
 # logger setup
 logger = logging.getLogger(__name__)
@@ -84,6 +90,14 @@ formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
 handler.setFormatter(formatter)
 # add the handlers to the logger
 logger.addHandler(handler)
+
+# supplying ca certificate for https
+# cacert file should be in module's directory
+if IS_FROZEN:
+    cacert = join(dirname(sys.executable), CACERT_FILE)
+else:
+    cacert = requests.certs.where()
+environ["REQUESTS_CA_BUNDLE"] = cacert
 
 
 def cloud_auth(session, login=LOGIN, password=PASSWORD):
@@ -240,7 +254,17 @@ def get_yes_no(value):
 
 if __name__ == '__main__':
     # do not upload self
-    FILES_TO_SKIP.add(basename(abspath(sys.modules['__main__'].__file__)))
+    if IS_FROZEN:
+        # skip exe file with dependencies
+        FILES_TO_SKIP.add(basename(sys.executable))
+    else:
+        # skip module's file
+        try:
+            self_file = basename(abspath(sys.modules['__main__'].__file__))
+        except:
+            logger.warning('Cannot get self file name.')
+        else:
+            FILES_TO_SKIP.add(self_file)
     if IS_CONFIG_PRESENT:
         # uploading files
         uploaded_files = set()
@@ -264,11 +288,12 @@ if __name__ == '__main__':
                     logger.error('Upload failed, check settings in <{}>'.format(CONFIG_FILE))
             else:
                 logger.error('Upload failed, check email credentials in <{}>'.format(CONFIG_FILE))
-        logger.info('{} files successfully uploaded'.format(len(uploaded_files)))
+        uploaded_num = len(uploaded_files)
+        logger.info('{} file(s) successfully uploaded'.format(uploaded_num))
         if REMOVE_UPLOADED and uploaded_files:
             for file in uploaded_files:
                 unlink(join(LOCAL_PATH, file))
-        print('Upload finished. See {} for details.'.format(LOG_PATH))
+        print('{} file(s) uploaded. See {} for details.'.format(uploaded_num, LOG_PATH))
     else:
         # creating a default config if local configuration does not exists
         config['Credentials'] = {'Email': LOGIN, 'Password': PASSWORD}

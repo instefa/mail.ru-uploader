@@ -246,27 +246,29 @@ if __name__ == '__main__':
         uploaded_files = set()
         with requests.Session() as s:
             cloud_csrf = get_cloud_csrf(s)
-            assert cloud_csrf is not None, 'CSRF token is absent. Check email credentials in <{}>.'.format(CONFIG_FILE)
-            upload_domain = get_upload_domain(s, csrf=cloud_csrf)
-            if cloud_csrf and upload_domain and isdir(LOCAL_PATH):
-                for file in get_dir_files(space=get_cloud_space(s, csrf=cloud_csrf)):
-                    hash, size = post_file(s, domain=upload_domain, filename=file, filetype=guess_type(file)[0])
-                    if size and hash:
-                        logger.info('File {} successfully posted'.format(file))
-                        if add_file(s, filename=file, hash=hash, size=size, csrf=cloud_csrf):
-                            logger.info('File {} successfully added'.format(file))
-                            uploaded_files.add(file)
+            if cloud_csrf:
+                upload_domain = get_upload_domain(s, csrf=cloud_csrf)
+                if upload_domain and isdir(LOCAL_PATH):
+                    for file in get_dir_files(space=get_cloud_space(s, csrf=cloud_csrf)):
+                        hash, size = post_file(s, domain=upload_domain, filename=file, filetype=guess_type(file)[0])
+                        if size and hash:
+                            logger.info('File {} successfully posted'.format(file))
+                            if add_file(s, filename=file, hash=hash, size=size, csrf=cloud_csrf):
+                                logger.info('File {} successfully added'.format(file))
+                                uploaded_files.add(file)
+                            else:
+                                logger.error('File {} addition failed'.format(file))
                         else:
-                            logger.error('File {} addition failed'.format(file))
-                    else:
-                        logger.error('File {} post failed'.format(file))
+                            logger.error('File {} post failed'.format(file))
+                else:
+                    logger.error('Upload failed, check settings in <{}>'.format(CONFIG_FILE))
             else:
-                logger.error('Upload failed, check settings in <{}>'.format(CONFIG_FILE))
+                logger.error('Upload failed, check email credentials in <{}>'.format(CONFIG_FILE))
         logger.info('{} files successfully uploaded'.format(len(uploaded_files)))
         if REMOVE_UPLOADED and uploaded_files:
             for file in uploaded_files:
                 unlink(join(LOCAL_PATH, file))
-        print('Upload complete. See {} for details.'.format(LOG_PATH))
+        print('Upload finished. See {} for details.'.format(LOG_PATH))
     else:
         # creating a default config if local configuration does not exists
         config['Credentials'] = {'Email': LOGIN, 'Password': PASSWORD}

@@ -87,3 +87,18 @@ ENV/
 
 # Rope project settings
 .ropeproject
+
+# VS 2015 related settings
+.vs/
+*.sln
+*.pyproj
+bin
+obj
+*.suo
+*.user
+*.pdb
+Settings.settings
+
+# local configuration files
+.config
+upload/

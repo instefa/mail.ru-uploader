@@ -5,7 +5,7 @@ Created: 2016-03-08
 
 @author: pymancer
 
-uploads current directory contents to mail.ru cloud
+uploads specified directory contents to mail.ru cloud
 - NO subdirectories handling
 - ONLY plain text and zip files TESTED, no contents checking though, only extensions
 - same name files in the cloud will not be replaced (still posted though)
@@ -16,6 +16,7 @@ pip install requests requests-toolbelt
 example run from venv:
 python -m upload
 """
+import sys
 import json
 import time
 import zlib
@@ -24,26 +25,42 @@ import zipfile
 import logging
 import requests
 import datetime
+import configparser
 from os import walk, unlink
-from os.path import join, getsize, splitext
+from os.path import join, getsize, splitext, basename, abspath, isdir
 from mimetypes import guess_type
 from requests_toolbelt import MultipartEncoder
 from requests.compat import urljoin, quote_plus
 from logging.handlers import RotatingFileHandler
 
-###-----SET AS YOU NEED PARAMETERS-------###
+__version__ = '0.0.1'
+IS_CONFIG_PRESENT = False # local configuration file presence indicator
+CONFIG_FILE = './.config' # configuration file, will be created on the very first use
+# trying to load local configuration file
+config = configparser.ConfigParser(delimiters=(':'))
+config.optionxform=str
+if config.read(CONFIG_FILE):
+    IS_CONFIG_PRESENT = True
+
+###----- GENERAL CONFIGURATION PARAMETERS-------###
 # do not forget to accept https://cloud.mail.ru/LA/ before first use by entering the cloud with browser)
-LOGIN = 'your_email@mail.ru' # full mail.ru email address
-PASSWORD = 'your_email_password' # email password
-# please, use only forward slashes
-CLOUD_PATH = 'backups/' # relative to cloud root, must end with slash, create this folder in the cloud before using this module
-LOCAL_PATH = './upload' # local folder path with files to upload, use '.' to set path relative to the module location
-## next settings generally are OK without any changes ##
-LOG_PATH  = './upload.log' # log file path relative to the module location (please, include file name)
-ARCHIVE_FILES = True # True, if False - no uploaded files zipping
-REMOVE_UPLOADED = True # True, if False - old files should be deleted manually before next session
+# please, use only forward slashes in path variables
+# please, note, that the last three variables in this block are generally are OK without any changes
+# full mail.ru email address
+LOGIN = config.get('Credentials', 'Email', fallback='your_email@mail.ru')
+# email password
+PASSWORD = config.get('Credentials', 'Password', fallback='your_email_password')
+# relative to cloud root, must end with slash, create this folder in the cloud before using this module
+CLOUD_PATH = config.get('Locations', 'CloudPath', fallback='backups/')
+# local folder path with files to upload, use '.' to set path relative to the module location
+LOCAL_PATH = config.get('Locations', 'LocalPath', fallback='./upload')
+# True, if False - no uploaded files zipping
+ARCHIVE_FILES = config.getboolean('Behaviour', 'ArchiveFiles', fallback=True)
+# True, if False - old files should be deleted manually before next session
+REMOVE_UPLOADED = config.getboolean('Behaviour', 'RemoveUploaded', fallback=True)
 ###--------------------------------------###
 
+LOG_PATH  = './upload.log' # log file path relative to the module location (please, include file name)
 CLOUD_URL = 'https://cloud.mail.ru/api/v2/'
 VERIFY_SSL = True # True, use False only for debug and if you know what you're doing
 CLOUD_DOMAIN_ORD = 2 # 2 - practice, 1 - theory
@@ -51,9 +68,10 @@ API_VER = 2 # 2 - constant so far
 TIME_AMEND = '0246' # '0246', exact meaning has not been quite sorted out yet
 CLOUD_CONFLICT = 'strict' # 'strict' - should remain unchanged at least until 'rename' implementation
 MAX_FILE_SIZE = 2*1024*1024*1024 # 2*1024*1024*1024 (bytes ~ 2 GB), API constraint
-FILES_TO_PRESERVE = ('application/zip', )
+FILES_TO_PRESERVE = ('application/zip', ) # do not archive already zipped files
 QUOTED_LOGIN = quote_plus(LOGIN) # just for convenience
 DEFAULT_FILETYPE = 'text/plain' # 'text/plain' is good option
+FILES_TO_SKIP = set((basename(CONFIG_FILE), basename(LOG_PATH))) # do not upload this files
 
 # logger setup
 logger = logging.getLogger(__name__)
@@ -194,8 +212,13 @@ def get_dir_files(path=LOCAL_PATH, space=0):
     assert space is not None, 'No cloud space left or space fetching error'
 
     for file in next(walk(LOCAL_PATH))[2]:
+        # in case we uploading current directory
+        if file in FILES_TO_SKIP:
+            continue
+        # in case some files are already zipped
         if ARCHIVE_FILES and guess_type(file)[0] not in FILES_TO_PRESERVE:
             file = zip_file(file)
+        # api restriction
         file_size = getsize(join(path,file))
         if file_size < MAX_FILE_SIZE:
             if file_size < space:
@@ -208,29 +231,50 @@ def get_dir_files(path=LOCAL_PATH, space=0):
             continue
 
 
+def get_yes_no(value):
+    """ helper function
+    coercing boolean value to 'yes' or 'no'
+    """
+    return 'yes' if value else 'no'
+
+
 if __name__ == '__main__':
-    uploaded_files = set()
-    with requests.Session() as s:
-        cloud_csrf = get_cloud_csrf(s)
-        assert cloud_csrf is not None, 'CSRF token is absent. Check email credentials.'
-        upload_domain = get_upload_domain(s, csrf=cloud_csrf)
-        if cloud_csrf and upload_domain:
-            for file in get_dir_files(space=get_cloud_space(s, csrf=cloud_csrf)):
-                hash, size = post_file(s, domain=upload_domain, filename=file, filetype=guess_type(file)[0])
-                if size and hash:
-                    logger.info('File {} successfully posted'.format(file))
-                    if add_file(s, filename=file, hash=hash, size=size, csrf=cloud_csrf):
-                        logger.info('File {} successfully added'.format(file))
-                        uploaded_files.add(file)
+    # do not upload self
+    FILES_TO_SKIP.add(basename(abspath(sys.modules['__main__'].__file__)))
+    if IS_CONFIG_PRESENT:
+        # uploading files
+        uploaded_files = set()
+        with requests.Session() as s:
+            cloud_csrf = get_cloud_csrf(s)
+            assert cloud_csrf is not None, 'CSRF token is absent. Check email credentials in <{}>.'.format(CONFIG_FILE)
+            upload_domain = get_upload_domain(s, csrf=cloud_csrf)
+            if cloud_csrf and upload_domain and isdir(LOCAL_PATH):
+                for file in get_dir_files(space=get_cloud_space(s, csrf=cloud_csrf)):
+                    hash, size = post_file(s, domain=upload_domain, filename=file, filetype=guess_type(file)[0])
+                    if size and hash:
+                        logger.info('File {} successfully posted'.format(file))
+                        if add_file(s, filename=file, hash=hash, size=size, csrf=cloud_csrf):
+                            logger.info('File {} successfully added'.format(file))
+                            uploaded_files.add(file)
+                        else:
+                            logger.error('File {} addition failed'.format(file))
                     else:
-                        logger.error('File {} addition failed'.format(file))
-                else:
-                    logger.error('File {} post failed'.format(file))
-        else:
-            logger.error('Upload failed, check prerequisites')
-    logger.info('{} files successfully uploaded'.format(len(uploaded_files)))
+                        logger.error('File {} post failed'.format(file))
+            else:
+                logger.error('Upload failed, check settings in <{}>'.format(CONFIG_FILE))
+        logger.info('{} files successfully uploaded'.format(len(uploaded_files)))
+        if REMOVE_UPLOADED and uploaded_files:
+            for file in uploaded_files:
+                unlink(join(LOCAL_PATH, file))
+        print('Upload complete. See {} for details.'.format(LOG_PATH))
+    else:
+        # creating a default config if local configuration does not exists
+        config['Credentials'] = {'Email': LOGIN, 'Password': PASSWORD}
+        config['Locations'] = {'CloudPath': CLOUD_PATH, 'LocalPath': LOCAL_PATH}
+        config['Behaviour'] = {'ArchiveFiles': get_yes_no(ARCHIVE_FILES), 'RemoveUploaded': get_yes_no(REMOVE_UPLOADED)}
+        with open(CONFIG_FILE, mode='w') as f:
+            config.write(f)
+        logger.warning('No configuration file () provided. Prepare it and run module again.'.format(CONFIG_FILE))
+        print('Please, check out configuration file: <{}> and run me again'.format(CONFIG_FILE))
     logger.info('###----------SESSION ENDED----------###')
-    print('Uploding complete. See {} for details.'.format(LOG_PATH))
-    if REMOVE_UPLOADED and uploaded_files:
-        for file in uploaded_files:
-            unlink(join(LOCAL_PATH, file))
+

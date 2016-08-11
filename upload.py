@@ -1,7 +1,7 @@
 #!/usr/bin/python3
 # -*- coding: utf-8 -*-
 """
-Created: 2016-03-08
+Created: 2016-08-09
 
 @author: pymancer
 
@@ -11,24 +11,25 @@ uploads specified directory contents to mail.ru cloud
 - same name files in the cloud will not be replaced (still posted though)
 - NO linux hidden files upload (names starting with dot)
 
-requirements (Python 3.3+):
+requirements (Python 3.5 to run and PyWin32 to build with PyInstaller):
 pip install requests requests-toolbelt
 
 example run from venv:
 python -m upload
 """
+import os
+
 import sys
 import json
 import time
 import zlib
 import pprint
-import zipfile
 import logging
+import os.path
+import zipfile
 import requests
 import datetime
 import configparser
-from os import walk, unlink, environ
-from os.path import join, getsize, splitext, basename, abspath, isdir, dirname
 from mimetypes import guess_type
 from requests_toolbelt import MultipartEncoder
 from requests.compat import urljoin, quote_plus
@@ -76,7 +77,8 @@ MAX_FILE_SIZE = 2*1024*1024*1024 # 2*1024*1024*1024 (bytes ~ 2 GB), API constrai
 FILES_TO_PRESERVE = ('application/zip', ) # do not archive already zipped files
 QUOTED_LOGIN = quote_plus(LOGIN) # just for convenience
 DEFAULT_FILETYPE = 'text/plain' # 'text/plain' is good option
-FILES_TO_SKIP = set((basename(CONFIG_FILE), basename(LOG_PATH))) # do not upload this files
+# do not upload this files (only for module's directory)
+FILES_TO_SKIP = set((os.path.basename(CONFIG_FILE), os.path.basename(LOG_PATH)))
 CACERT_FILE = 'cacert.pem'
 
 # logger setup
@@ -90,14 +92,6 @@ formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
 handler.setFormatter(formatter)
 # add the handlers to the logger
 logger.addHandler(handler)
-
-# supplying ca certificate for https
-# cacert file should be in module's directory
-if IS_FROZEN:
-    cacert = join(dirname(sys.executable), CACERT_FILE)
-else:
-    cacert = requests.certs.where()
-environ["REQUESTS_CA_BUNDLE"] = cacert
 
 
 def cloud_auth(session, login=LOGIN, password=PASSWORD):
@@ -163,7 +157,7 @@ def post_file(session, domain='', filename='', filetype=''):
 
     timestamp = str(int(time.mktime(datetime.datetime.now().timetuple()))) + TIME_AMEND
     url = urljoin(domain, '?cloud_domain=' + str(CLOUD_DOMAIN_ORD) + '&x-email=' + QUOTED_LOGIN + '&fileapi' + timestamp)
-    m = MultipartEncoder(fields={'file': (quote_plus(filename), open(join(LOCAL_PATH, filename), 'rb'), filetype)})
+    m = MultipartEncoder(fields={'file': (quote_plus(filename), open(os.path.join(LOCAL_PATH, filename), 'rb'), filetype)})
 
     r = session.post(url, data=m, headers={'Content-Type': m.content_type}, verify = VERIFY_SSL)
     if r.status_code == requests.codes.ok:
@@ -203,19 +197,19 @@ def zip_file(file):
     on failure returns original file name
     replaces existing archives
     """
-    file_root, file_ext = splitext(file)
+    file_root, file_ext = os.path.splitext(file)
     zip_name = file_root + '.zip'
     compression = zipfile.ZIP_DEFLATED
     try:
-        zf = zipfile.ZipFile(join(LOCAL_PATH, zip_name), mode='w')
+        zf = zipfile.ZipFile(os.path.join(LOCAL_PATH, zip_name), mode='w')
         zf.debug = 0
         # convert unicode file names to byte strings if any
-        zf.write(join(LOCAL_PATH, file), arcname=file, compress_type=compression)
+        zf.write(os.path.join(LOCAL_PATH, file), arcname=file, compress_type=compression)
     except Exception as e:
         logger.error('Failed to archive {}, error:'.format(file, e))
         zip_name = file
     else:
-        unlink(join(LOCAL_PATH, file))
+        os.unlink(os.path.join(LOCAL_PATH, file))
     finally:
         zf.close()
     return zip_name
@@ -225,15 +219,15 @@ def get_dir_files(path=LOCAL_PATH, space=0):
     """ returns list of the cwd files, follows cloud restrictions """
     assert space is not None, 'No cloud space left or space fetching error'
 
-    for file in next(walk(LOCAL_PATH))[2]:
+    for file in next(os.walk(LOCAL_PATH))[2]:
         # in case we uploading current directory
-        if file in FILES_TO_SKIP:
+        if file in FILES_TO_SKIP and LOCAL_PATH == '.':
             continue
         # in case some files are already zipped
         if ARCHIVE_FILES and guess_type(file)[0] not in FILES_TO_PRESERVE:
             file = zip_file(file)
         # api restriction
-        file_size = getsize(join(path,file))
+        file_size = os.path.getsize(os.path.join(path,file))
         if file_size < MAX_FILE_SIZE:
             if file_size < space:
                 yield file
@@ -252,19 +246,37 @@ def get_yes_no(value):
     return 'yes' if value else 'no'
 
 
+def resource_path(relative_path):
+    """ Get absolute path to resource, works for dev and for PyInstaller """
+    if hasattr(sys, '_MEIPASS'):
+        return os.path.join(sys._MEIPASS, relative_path)
+
+    return os.path.join(os.path.abspath('.'), relative_path)
+
+
 if __name__ == '__main__':
-    # do not upload self
     if IS_FROZEN:
-        # skip exe file with dependencies
-        FILES_TO_SKIP.add(basename(sys.executable))
+        # do not upload self, skip exe file with dependencies
+        FILES_TO_SKIP.add(os.path.basename(sys.executable))
+        # supplying ca certificate for https
+        # cacert file should be in module's directory
+        # for cx_Freeze
+        #cacert = os.path.join(os.path.dirname(sys.executable), CACERT_FILE)
+        # for PyInstaller
+        cacert = resource_path(CACERT_FILE)
     else:
-        # skip module's file
+        # provide CA cert (not necessary)
+        cacert = requests.certs.where()
+        # do not upload self, skip module's file
         try:
-            self_file = basename(abspath(sys.modules['__main__'].__file__))
+            self_file = os.path.basename(os.path.abspath(sys.modules['__main__'].__file__))
         except:
             logger.warning('Cannot get self file name.')
         else:
             FILES_TO_SKIP.add(self_file)
+    assert os.path.isfile(cacert), 'Fatal Error. CA certificate not found.'
+    os.environ["REQUESTS_CA_BUNDLE"] = cacert
+    # cloud credentials should be in the configuration file
     if IS_CONFIG_PRESENT:
         # uploading files
         uploaded_files = set()
@@ -272,7 +284,7 @@ if __name__ == '__main__':
             cloud_csrf = get_cloud_csrf(s)
             if cloud_csrf:
                 upload_domain = get_upload_domain(s, csrf=cloud_csrf)
-                if upload_domain and isdir(LOCAL_PATH):
+                if upload_domain and os.path.isdir(LOCAL_PATH):
                     for file in get_dir_files(space=get_cloud_space(s, csrf=cloud_csrf)):
                         hash, size = post_file(s, domain=upload_domain, filename=file, filetype=guess_type(file)[0])
                         if size and hash:
@@ -292,7 +304,7 @@ if __name__ == '__main__':
         logger.info('{} file(s) successfully uploaded'.format(uploaded_num))
         if REMOVE_UPLOADED and uploaded_files:
             for file in uploaded_files:
-                unlink(join(LOCAL_PATH, file))
+                os.unlink(os.path.join(LOCAL_PATH, file))
         print('{} file(s) uploaded. See {} for details.'.format(uploaded_num, LOG_PATH))
     else:
         # creating a default config if local configuration does not exists

@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 
 """
-Created: 2016-03-08
+Created: 2016-08-10
 
 @author: pymancer
 
@@ -19,7 +19,7 @@ from cx_Freeze import setup, Executable
 
 options = {
     'build_exe': {
-        'packages': ['requests', ],
+        'packages': ['requests', 'requests_toolbelt'],
         'include_files' : [(requests.certs.where(), 'cacert.pem')]
     }
 }

@@ -6,9 +6,9 @@ Created: 2016-08-09
 @author: pymancer
 
 uploads specified directory contents to mail.ru cloud
-- ONLY plain text and zip files TESTED, no contents checking though, only extensions
-- same name files in the cloud will not be replaced (still posted though)
-- NO linux hidden files upload (names starting with dot)
+- same name files in the cloud will NOT be replaced (still zipped and posted though)
+- preserves upload directory structure
+- only relative paths were tested at this moment
 
 requirements (Python 3.5):
 pip install requests requests-toolbelt
@@ -22,13 +22,13 @@ import sys
 import json
 import time
 import zlib
-import pprint
 import logging
 import os.path
 import zipfile
 import requests
 import datetime
 import configparser
+from shutil import move
 from mimetypes import guess_type
 from requests_toolbelt import MultipartEncoder
 from requests.compat import urljoin, quote_plus
@@ -66,7 +66,9 @@ ARCHIVE_FILES = config.getboolean('Behaviour', 'ArchiveFiles', fallback=True)
 # True, if False - old files should be deleted manually before next session
 REMOVE_UPLOADED = config.getboolean('Behaviour', 'RemoveUploaded', fallback=True)
 # False, if True uploaded files will be moved to UPLOADED_PATH directory, REMOVE_UPLOADED setting will be ignored
-MOVE_UPLOADED = config.getboolean('Behaviour', 'MoveUploaded', fallback=True)
+MOVE_UPLOADED = config.getboolean('Behaviour', 'MoveUploaded', fallback=False)
+# True, will delete empty upload folders, will leave root folder, if False only files will be removed or moved if set
+REMOVE_FOLDERS = config.getboolean('Behaviour', 'RemoveFolders', fallback=True)
 ###--------------------------------------###
 
 LOG_PATH  = './upload.log' # log file path relative to the module location (please, include file name)
@@ -181,7 +183,6 @@ def post_file(session, domain='', file=''):
 def add_file(session, file='', hash='', size=0, csrf=''):
     """ 'file' should be filename with absolute cloud path """
     assert file is not None, 'No file to upload passed'
-    assert path is not None, 'No cloud path to upload passed'
     assert len(hash) == 40, 'No hash passed'
     assert size > 0, 'No size passed'
     assert csrf is not None, 'No CSRF token passed'
@@ -248,7 +249,9 @@ def zip_file(file):
         logger.error('Failed to archive {}, error:'.format(file, e))
         zip_name = file_name
     else:
+        logger.info('{} archived as {}'.format(file, os.path.join(file_path, zip_name)))
         os.unlink(file)
+        logger.info('file {} deleted after archiving'.format(file))
     finally:
         zf.close()
     return os.path.join(file_path, zip_name)
@@ -265,7 +268,7 @@ def get_dir_files(path=UPLOAD_PATH, space=0):
             continue
         # in case some files are already zipped
         if ARCHIVE_FILES and guess_type(file)[0] not in FILES_TO_PRESERVE:
-            full_filename = zip_file(file)
+            file = zip_file(file)
         # api restriction
         file_size = os.path.getsize(file)
         if file_size < MAX_FILE_SIZE:
@@ -286,7 +289,7 @@ def get_yes_no(value):
     return 'yes' if value else 'no'
 
 
-def create_cloud_path(cloud_base, local_base, path):
+def create_cloud_path(path, cloud_base=CLOUD_PATH, local_base=UPLOAD_PATH):
     """ example:
     cloud_base='/backups'
     local_base='./upload'
@@ -338,9 +341,9 @@ if __name__ == '__main__':
             if cloud_csrf:
                 upload_domain = get_upload_domain(s, csrf=cloud_csrf)
                 if upload_domain and os.path.isdir(UPLOAD_PATH):
-                    for folder in os.walk(UPLOAD_PATH)[0]:
+                    for folder, __, __ in list(os.walk(UPLOAD_PATH)):
                         # cloud dir should exist before uploading
-                        cloud_path = create_cloud_path(UPLOAD_PATH, folder)
+                        cloud_path = create_cloud_path(folder)
                         create_folder(s, folder=cloud_path, csrf=cloud_csrf)
                         # uploading files
                         for file in get_dir_files(path=folder, space=get_cloud_space(s, csrf=cloud_csrf)):
@@ -348,7 +351,7 @@ if __name__ == '__main__':
                             if size and hash:
                                 logger.info('File {} successfully posted'.format(file))
                                 cloud_file = cloud_path + '/' + os.path.basename(file)
-                                if add_file(s, file=cloudfile, hash=hash, size=size, csrf=cloud_csrf):
+                                if add_file(s, file=cloud_file, hash=hash, size=size, csrf=cloud_csrf):
                                     logger.info('File {} successfully added'.format(file))
                                     uploaded_files.add(file)
                                 else:
@@ -369,10 +372,15 @@ if __name__ == '__main__':
                 # pretty unreliable way to create path
                 file_new_dir = file_dir.replace(upload_dir, uploaded_dir, 1)
                 os.makedirs(file_new_dir, exist_ok=True)
-                os.rename(file, os.path.join(file_new_dir, file_name))
+                move(file, os.path.join(file_new_dir, file_name))
         elif REMOVE_UPLOADED and uploaded_files:
             for file in uploaded_files:
                 os.unlink(file)
+        if REMOVE_FOLDERS and (MOVE_UPLOADED or REMOVE_UPLOADED):
+            for folder, __, __ in list(os.walk(UPLOAD_PATH, topdown=False)):
+                if folder != UPLOAD_PATH and not os.listdir(folder):
+                    os.rmdir(folder)
+                    logger.info('Empty directory {} deleted'.format(folder))
         print('{} file(s) uploaded. See {} for details.'.format(uploaded_num, LOG_PATH))
     else:
         # creating a default config if local configuration does not exists
@@ -380,7 +388,8 @@ if __name__ == '__main__':
         config['Locations'] = {'CloudPath': CLOUD_PATH, 'UploadPath': UPLOAD_PATH, 'UploadedPath': UPLOADED_PATH}
         config['Behaviour'] = {'ArchiveFiles': get_yes_no(ARCHIVE_FILES),
                                'MoveUploaded': get_yes_no(MOVE_UPLOADED),
-                               'RemoveUploaded': get_yes_no(REMOVE_UPLOADED)}
+                               'RemoveUploaded': get_yes_no(REMOVE_UPLOADED),
+                               'RemoveFolders': get_yes_no(REMOVE_FOLDERS)}
         with open(CONFIG_FILE, mode='w') as f:
             config.write(f)
         logger.warning('No configuration file () provided. Prepare it and run module again.'.format(CONFIG_FILE))

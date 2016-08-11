@@ -6,12 +6,11 @@ Created: 2016-08-09
 @author: pymancer
 
 uploads specified directory contents to mail.ru cloud
-- NO subdirectories handling
 - ONLY plain text and zip files TESTED, no contents checking though, only extensions
 - same name files in the cloud will not be replaced (still posted though)
 - NO linux hidden files upload (names starting with dot)
 
-requirements (Python 3.5 to run and PyWin32 to build with PyInstaller):
+requirements (Python 3.5):
 pip install requests requests-toolbelt
 
 example run from venv:
@@ -35,7 +34,7 @@ from requests_toolbelt import MultipartEncoder
 from requests.compat import urljoin, quote_plus
 from logging.handlers import RotatingFileHandler
 
-__version__ = '0.0.1'
+__version__ = '0.0.2'
 
 IS_CONFIG_PRESENT = False # local configuration file presence indicator
 CONFIG_FILE = './.config' # configuration file, will be created on the very first use
@@ -59,11 +58,15 @@ PASSWORD = config.get('Credentials', 'Password', fallback='your_email_password')
 # relative to cloud root, must end with slash, create this folder in the cloud before using this module
 CLOUD_PATH = config.get('Locations', 'CloudPath', fallback='backups/')
 # local folder path with files to upload, use '.' to set path relative to the module location
-LOCAL_PATH = config.get('Locations', 'LocalPath', fallback='./upload')
+UPLOAD_PATH = config.get('Locations', 'UploadPath', fallback='./upload')
+# local folder to move uploaded files, will be created if not exists
+UPLOADED_PATH = config.get('Locations', 'UploadedPath', fallback='./uploaded')
 # True, if False - no uploaded files zipping
 ARCHIVE_FILES = config.getboolean('Behaviour', 'ArchiveFiles', fallback=True)
 # True, if False - old files should be deleted manually before next session
 REMOVE_UPLOADED = config.getboolean('Behaviour', 'RemoveUploaded', fallback=True)
+# False, if True uploaded files will be moved to UPLOADED_PATH directory, REMOVE_UPLOADED setting will be ignored
+MOVE_UPLOADED = config.getboolean('Behaviour', 'MoveUploaded', fallback=True)
 ###--------------------------------------###
 
 LOG_PATH  = './upload.log' # log file path relative to the module location (please, include file name)
@@ -157,7 +160,7 @@ def post_file(session, domain='', filename='', filetype=''):
 
     timestamp = str(int(time.mktime(datetime.datetime.now().timetuple()))) + TIME_AMEND
     url = urljoin(domain, '?cloud_domain=' + str(CLOUD_DOMAIN_ORD) + '&x-email=' + QUOTED_LOGIN + '&fileapi' + timestamp)
-    m = MultipartEncoder(fields={'file': (quote_plus(filename), open(os.path.join(LOCAL_PATH, filename), 'rb'), filetype)})
+    m = MultipartEncoder(fields={'file': (quote_plus(filename), open(os.path.join(UPLOAD_PATH, filename), 'rb'), filetype)})
 
     r = session.post(url, data=m, headers={'Content-Type': m.content_type}, verify = VERIFY_SSL)
     if r.status_code == requests.codes.ok:
@@ -201,27 +204,27 @@ def zip_file(file):
     zip_name = file_root + '.zip'
     compression = zipfile.ZIP_DEFLATED
     try:
-        zf = zipfile.ZipFile(os.path.join(LOCAL_PATH, zip_name), mode='w')
+        zf = zipfile.ZipFile(os.path.join(UPLOAD_PATH, zip_name), mode='w')
         zf.debug = 0
         # convert unicode file names to byte strings if any
-        zf.write(os.path.join(LOCAL_PATH, file), arcname=file, compress_type=compression)
+        zf.write(os.path.join(UPLOAD_PATH, file), arcname=file, compress_type=compression)
     except Exception as e:
         logger.error('Failed to archive {}, error:'.format(file, e))
         zip_name = file
     else:
-        os.unlink(os.path.join(LOCAL_PATH, file))
+        os.unlink(os.path.join(UPLOAD_PATH, file))
     finally:
         zf.close()
     return zip_name
 
 
-def get_dir_files(path=LOCAL_PATH, space=0):
+def get_dir_files(path=UPLOAD_PATH, space=0):
     """ returns list of the cwd files, follows cloud restrictions """
     assert space is not None, 'No cloud space left or space fetching error'
 
-    for file in next(os.walk(LOCAL_PATH))[2]:
+    for file in next(os.walk(UPLOAD_PATH))[2]:
         # in case we uploading current directory
-        if file in FILES_TO_SKIP and LOCAL_PATH == '.':
+        if file in FILES_TO_SKIP and UPLOAD_PATH == '.':
             continue
         # in case some files are already zipped
         if ARCHIVE_FILES and guess_type(file)[0] not in FILES_TO_PRESERVE:
@@ -284,7 +287,7 @@ if __name__ == '__main__':
             cloud_csrf = get_cloud_csrf(s)
             if cloud_csrf:
                 upload_domain = get_upload_domain(s, csrf=cloud_csrf)
-                if upload_domain and os.path.isdir(LOCAL_PATH):
+                if upload_domain and os.path.isdir(UPLOAD_PATH):
                     for file in get_dir_files(space=get_cloud_space(s, csrf=cloud_csrf)):
                         hash, size = post_file(s, domain=upload_domain, filename=file, filetype=guess_type(file)[0])
                         if size and hash:
@@ -302,14 +305,19 @@ if __name__ == '__main__':
                 logger.error('Upload failed, check email credentials in <{}>'.format(CONFIG_FILE))
         uploaded_num = len(uploaded_files)
         logger.info('{} file(s) successfully uploaded'.format(uploaded_num))
-        if REMOVE_UPLOADED and uploaded_files:
+        if MOVE_UPLOADED:
+            if not os.path.exists(UPLOADED_PATH):
+                os.makedirs(UPLOADED_PATH)
             for file in uploaded_files:
-                os.unlink(os.path.join(LOCAL_PATH, file))
+                os.rename(os.path.join(UPLOAD_PATH, file), os.path.join(UPLOADED_PATH, file))
+        elif REMOVE_UPLOADED and uploaded_files:
+            for file in uploaded_files:
+                os.unlink(os.path.join(UPLOAD_PATH, file))
         print('{} file(s) uploaded. See {} for details.'.format(uploaded_num, LOG_PATH))
     else:
         # creating a default config if local configuration does not exists
         config['Credentials'] = {'Email': LOGIN, 'Password': PASSWORD}
-        config['Locations'] = {'CloudPath': CLOUD_PATH, 'LocalPath': LOCAL_PATH}
+        config['Locations'] = {'CloudPath': CLOUD_PATH, 'UploadPath': UPLOAD_PATH, 'UploadedPath': UPLOADED_PATH}
         config['Behaviour'] = {'ArchiveFiles': get_yes_no(ARCHIVE_FILES), 'RemoveUploaded': get_yes_no(REMOVE_UPLOADED)}
         with open(CONFIG_FILE, mode='w') as f:
             config.write(f)

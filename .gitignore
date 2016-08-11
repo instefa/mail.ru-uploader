@@ -101,3 +101,4 @@ Settings.settings
 # local configuration files
 .config
 upload/
+version.txt

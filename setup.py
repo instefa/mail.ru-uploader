@@ -16,6 +16,8 @@ import sys
 import requests
 from cx_Freeze import setup, Executable
 
+from upload import __version__
+
 
 options = {
     'build_exe': {
@@ -29,8 +31,8 @@ executables = [
 ]
 
 setup(name = "mail.ru-uploader" ,
-      version = "0.0.2" ,
-      description = "" ,
+      version = __version__,
+      description = "unofficial mail.ru uploader",
       options=options,
       executables=executables
       )

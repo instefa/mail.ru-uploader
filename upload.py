@@ -9,6 +9,7 @@ uploads specified directory contents to mail.ru cloud
 - same name files in the cloud will NOT be replaced (still zipped and posted though)
 - preserves upload directory structure
 - only relative paths were tested at this moment
+- functions are not designed for import, module needs refactoring to class
 
 requirements (Python 3.5):
 pip install requests requests-toolbelt
@@ -34,7 +35,7 @@ from requests_toolbelt import MultipartEncoder
 from requests.compat import urljoin, quote_plus
 from logging.handlers import RotatingFileHandler
 
-__version__ = '0.0.2'
+__version__ = '0.0.3'
 
 IS_CONFIG_PRESENT = False # local configuration file presence indicator
 CONFIG_FILE = './.config' # configuration file, will be created on the very first use
@@ -71,7 +72,7 @@ MOVE_UPLOADED = config.getboolean('Behaviour', 'MoveUploaded', fallback=False)
 REMOVE_FOLDERS = config.getboolean('Behaviour', 'RemoveFolders', fallback=True)
 ###--------------------------------------###
 
-LOG_PATH  = './upload.log' # log file path relative to the module location (please, include file name)
+LOG_FILE  = './upload.log' # log file path relative to the module location
 CLOUD_URL = 'https://cloud.mail.ru/api/v2/'
 VERIFY_SSL = True # True, use False only for debug and if you know what you're doing
 CLOUD_DOMAIN_ORD = 2 # 2 - practice, 1 - theory
@@ -83,20 +84,23 @@ FILES_TO_PRESERVE = ('application/zip', ) # do not archive already zipped files
 QUOTED_LOGIN = quote_plus(LOGIN) # just for convenience
 DEFAULT_FILETYPE = 'text/plain' # 'text/plain' is good option
 # do not upload this files (only for module's directory)
-FILES_TO_SKIP = set((os.path.basename(CONFIG_FILE), os.path.basename(LOG_PATH)))
+FILES_TO_SKIP = set((os.path.basename(CONFIG_FILE), os.path.basename(LOG_FILE)))
 CACERT_FILE = 'cacert.pem'
+LOGGER = None
 
-# logger setup
-logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
-# create a file handler
-handler = RotatingFileHandler(LOG_PATH, mode='a', maxBytes=5*1024*1024, backupCount=2, encoding=None, delay=0)
-handler.setLevel(logging.INFO)
-# create a logging format
-formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
-handler.setFormatter(formatter)
-# add the handlers to the logger
-logger.addHandler(handler)
+
+def get_logger(name, log_file=LOG_FILE):
+    logger = logging.getLogger(name)
+    logger.setLevel(logging.INFO)
+    # create a file handler
+    handler = RotatingFileHandler(LOG_FILE, mode='a', maxBytes=5*1024*1024, backupCount=2, encoding=None, delay=0)
+    handler.setLevel(logging.INFO)
+    # create a logging format
+    formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+    handler.setFormatter(formatter)
+    # add the handlers to the logger
+    logger.addHandler(handler)
+    return logger
 
 
 def cloud_auth(session, login=LOGIN, password=PASSWORD):
@@ -105,8 +109,8 @@ def cloud_auth(session, login=LOGIN, password=PASSWORD):
                              'new_auth_form': 1, 'Domain': LOGIN.split('@')[1]}, verify = VERIFY_SSL)
     if r.status_code == requests.codes.ok:
         return True
-    else:
-        logger.error('Mail authorization request unsuccessful, http code: {}, msg: {}'.format(r.status_code, r.text))
+    elif LOGGER:
+        LOGGER.error('Mail authorization request unsuccessful, http code: {}, msg: {}'.format(r.status_code, r.text))
     return None
 
 
@@ -115,19 +119,20 @@ def get_csrf(session):
     if r.status_code == requests.codes.ok:
         r_json = r.json()
         return r_json['body']['token']
-    else:
-        logger.error('CSRF token request unsuccessful, http code: {}, msg: {}'.format(r.status_code, r.text))
+    elif LOGGER:
+        LOGGER.error('CSRF token request unsuccessful, http code: {}, msg: {}'.format(r.status_code, r.text))
     return None
 
 
 def get_upload_domain(session, csrf=''):
+    """ return current cloud's upload domain url """
     url = urljoin(CLOUD_URL, 'dispatcher?token=' + csrf)
     r = session.get(url, verify = VERIFY_SSL)
     if r.status_code == requests.codes.ok:
         r_json = r.json()
         return r_json['body']['upload'][0]['url']
-    else:
-        logger.error('Upload domain request unsuccessful, http code: {}, msg: {}'.format(r.status_code, r.text))
+    elif LOGGER:
+        LOGGER.error('Upload domain request unsuccessful, http code: {}, msg: {}'.format(r.status_code, r.text))
     return None
 
 
@@ -153,14 +158,17 @@ def get_cloud_space(session, csrf=''):
     return 0
 
 def post_file(session, domain='', file=''):
-    """ 'file' should be filename with path """
+    """ posts file to the cloud's upload server
+    param: file - string filename with path
+    """
     assert domain is not None, 'No domain to upload provided'
     assert file is not None, 'No file to upload provided'
 
     filetype = guess_type(file)[0]
     if not filetype:
-        logger.warning('File {} type unknown, using default: {}'.format(file, DEFAULT_FILETYPE))
         filetype = DEFAULT_FILETYPE
+        if LOGGER:
+            LOGGER.warning('File {} type unknown, using default: {}'.format(file, DEFAULT_FILETYPE))
 
     filename = os.path.basename(file)
     timestamp = str(int(time.mktime(datetime.datetime.now().timetuple()))) + TIME_AMEND
@@ -173,10 +181,10 @@ def post_file(session, domain='', file=''):
             hash = r.content[:40].decode()
             size = int(r.content[41:-2])
             return (hash, size)
-        else:
-            logger.error('File {} post error, no hash and size obtained'.format(file))
-    else:
-        logger.error('File {} post error, http code: {}, msg: {}'.format(file, r.status_code, r.text))
+        elif LOGGER:
+            LOGGER.error('File {} post error, no hash and size obtained'.format(file))
+    elif LOGGER:
+        LOGGER.error('File {} post error, http code: {}, msg: {}'.format(file, r.status_code, r.text))
     return (None, None)
 
 
@@ -192,11 +200,11 @@ def add_file(session, file='', hash='', size=0, csrf=''):
     postdata = {'home': file, 'hash': hash, 'size': size, 'conflict': CLOUD_CONFLICT, 'token': csrf,
                 'api': API_VER, 'email':LOGIN, 'x-email': LOGIN}
 
-    r = s.post(url, data=postdata, headers={'Content-Type': 'application/x-www-form-urlencoded'}, verify=VERIFY_SSL)
+    r = session.post(url, data=postdata, headers={'Content-Type': 'application/x-www-form-urlencoded'}, verify=VERIFY_SSL)
     if r.status_code == requests.codes.ok:
         return True
-    else:
-        logger.error('File {} addition error, http code: {}, msg: {}'.format(file, r.status_code, r.text))
+    elif LOGGER:
+        LOGGER.error('File {} addition error, http code: {}, msg: {}'.format(file, r.status_code, r.text))
     return None
 
 
@@ -212,7 +220,7 @@ def create_folder(session, folder='', csrf=''):
     # api, email, x-email, x-page-id (not implemented), build (not implemented) - optional parameters
     postdata = {'home': folder, 'conflict': CLOUD_CONFLICT, 'token': csrf,
                 'api': API_VER, 'email':LOGIN, 'x-email': LOGIN}
-    r = s.post(url, data=postdata, headers={'Content-Type': 'application/x-www-form-urlencoded'}, verify=VERIFY_SSL)
+    r = session.post(url, data=postdata, headers={'Content-Type': 'application/x-www-form-urlencoded'}, verify=VERIFY_SSL)
     if r.status_code == requests.codes.ok:
         return True
     elif r.status_code == requests.codes.bad:
@@ -221,12 +229,13 @@ def create_folder(session, folder='', csrf=''):
         except KeyError:
             r_error = None
         if r_error == 'exists':
-            logger.warning('Folder {} already exists'.format(folder))
+            if LOGGER:
+                LOGGER.warning('Folder {} already exists'.format(folder))
             return True
-        else:
-            logger.error('Folder {} creating failed, http code 400. Error: {}'.format(r_error))
-    else:
-        logger.error('Folder {} creating error, http code: {}, msg: {}'.format(folder, r.status_code, r.text))
+        elif LOGGER:
+            LOGGER.error('Folder {} creating failed, http code 400. Error: {}'.format(r_error))
+    elif LOGGER:
+        LOGGER.error('Folder {} creating error, http code: {}, msg: {}'.format(folder, r.status_code, r.text))
     return None
 
 
@@ -235,6 +244,7 @@ def zip_file(file):
     on success deletes original file
     on failure returns original file
     replaces existing archives
+    param: file - filename with path (string)
     """
     file_path, file_name = os.path.split(file)
     file_root, file_ext = os.path.splitext(file_name)
@@ -246,12 +256,14 @@ def zip_file(file):
         # convert unicode file names to byte strings if any
         zf.write(file, arcname=file_name, compress_type=compression)
     except Exception as e:
-        logger.error('Failed to archive {}, error:'.format(file, e))
         zip_name = file_name
+        if LOGGER:
+            LOGGER.error('Failed to archive {}, error:'.format(file, e))
     else:
-        logger.info('{} archived as {}'.format(file, os.path.join(file_path, zip_name)))
         os.unlink(file)
-        logger.info('file {} deleted after archiving'.format(file))
+        if LOGGER:
+            LOGGER.info('{} archived as {}'.format(file, os.path.join(file_path, zip_name)))
+            LOGGER.info('file {} deleted after archiving'.format(file))
     finally:
         zf.close()
     return os.path.join(file_path, zip_name)
@@ -275,22 +287,23 @@ def get_dir_files(path=UPLOAD_PATH, space=0):
             if file_size < space:
                 yield file
             else:
-                logger.warning('The cloud has not enough space for <{}>. Left: {} (B). Required: {} (B).'.format(file, space, file_size))
+                if LOGGER:
+                    LOGGER.warning('The cloud has not enough space for <{}>. Left: {} (B). Required: {} (B).'.format(file, space, file_size))
                 continue
         else:
-            logger.warning('File {} is too large, omitting'.format(file))
+            if LOGGER:
+                LOGGER.warning('File {} is too large, omitting'.format(file))
             continue
 
 
 def get_yes_no(value):
-    """ helper function
-    coercing boolean value to 'yes' or 'no'
-    """
+    """ coercing boolean value to 'yes' or 'no' """
     return 'yes' if value else 'no'
 
 
 def create_cloud_path(path, cloud_base=CLOUD_PATH, local_base=UPLOAD_PATH):
-    """ example:
+    """ converts os path to the format acceptable by the cloud
+    example:
     cloud_base='/backups'
     local_base='./upload'
     path='./upload\\level1_1'
@@ -309,7 +322,17 @@ def resource_path(relative_path):
     return os.path.join(os.path.abspath('.'), relative_path)
 
 
-if __name__ == '__main__':
+def close_logger(logger):
+    handlers = logger.handlers[:]
+    for handler in handlers:
+        handler.close()
+        logger.removeHandler(handler)
+
+
+def main():
+    # setting up global logger
+    global LOGGER
+    LOGGER = get_logger(__name__, log_file=LOG_FILE)
     if IS_FROZEN:
         # do not upload self, skip exe file with dependencies
         FILES_TO_SKIP.add(os.path.basename(sys.executable))
@@ -326,7 +349,7 @@ if __name__ == '__main__':
         try:
             self_file = os.path.basename(os.path.abspath(sys.modules['__main__'].__file__))
         except:
-            logger.warning('Cannot get self file name.')
+            LOGGER.warning('Cannot get self file name.')
         else:
             FILES_TO_SKIP.add(self_file)
     assert os.path.isfile(cacert), 'Fatal Error. CA certificate not found.'
@@ -349,21 +372,21 @@ if __name__ == '__main__':
                         for file in get_dir_files(path=folder, space=get_cloud_space(s, csrf=cloud_csrf)):
                             hash, size = post_file(s, domain=upload_domain, file=file)
                             if size and hash:
-                                logger.info('File {} successfully posted'.format(file))
+                                LOGGER.info('File {} successfully posted'.format(file))
                                 cloud_file = cloud_path + '/' + os.path.basename(file)
                                 if add_file(s, file=cloud_file, hash=hash, size=size, csrf=cloud_csrf):
-                                    logger.info('File {} successfully added'.format(file))
+                                    LOGGER.info('File {} successfully added'.format(file))
                                     uploaded_files.add(file)
                                 else:
-                                    logger.error('File {} addition failed'.format(file))
+                                    LOGGER.error('File {} addition failed'.format(file))
                             else:
-                                logger.error('File {} post failed'.format(file))
+                                LOGGER.error('File {} post failed'.format(file))
                 else:
-                    logger.error('Upload failed, check settings in <{}>'.format(CONFIG_FILE))
+                    LOGGER.error('Upload failed, check settings in <{}>'.format(CONFIG_FILE))
             else:
-                logger.error('Upload failed, check email credentials in <{}>'.format(CONFIG_FILE))
+                LOGGER.error('Upload failed, check email credentials in <{}>'.format(CONFIG_FILE))
         uploaded_num = len(uploaded_files)
-        logger.info('{} file(s) successfully uploaded'.format(uploaded_num))
+        LOGGER.info('{} file(s) successfully uploaded'.format(uploaded_num))
         if MOVE_UPLOADED:
             upload_dir = os.path.abspath(UPLOAD_PATH)
             uploaded_dir = os.path.abspath(UPLOADED_PATH)
@@ -373,15 +396,17 @@ if __name__ == '__main__':
                 file_new_dir = file_dir.replace(upload_dir, uploaded_dir, 1)
                 os.makedirs(file_new_dir, exist_ok=True)
                 move(file, os.path.join(file_new_dir, file_name))
+                LOGGER.info('file {} moved to {}'.format(file, file_new_dir))
         elif REMOVE_UPLOADED and uploaded_files:
             for file in uploaded_files:
                 os.unlink(file)
+                LOGGER.info('file {} removed'.format(file))
         if REMOVE_FOLDERS and (MOVE_UPLOADED or REMOVE_UPLOADED):
             for folder, __, __ in list(os.walk(UPLOAD_PATH, topdown=False)):
                 if folder != UPLOAD_PATH and not os.listdir(folder):
                     os.rmdir(folder)
-                    logger.info('Empty directory {} deleted'.format(folder))
-        print('{} file(s) uploaded. See {} for details.'.format(uploaded_num, LOG_PATH))
+                    LOGGER.info('Empty directory {} deleted'.format(folder))
+        print('{} file(s) uploaded. See {} for details.'.format(uploaded_num, LOG_FILE))
     else:
         # creating a default config if local configuration does not exists
         config['Credentials'] = {'Email': LOGIN, 'Password': PASSWORD}
@@ -392,7 +417,11 @@ if __name__ == '__main__':
                                'RemoveFolders': get_yes_no(REMOVE_FOLDERS)}
         with open(CONFIG_FILE, mode='w') as f:
             config.write(f)
-        logger.warning('No configuration file () provided. Prepare it and run module again.'.format(CONFIG_FILE))
+        LOGGER.warning('No configuration file () provided. Prepare it and run module again.'.format(CONFIG_FILE))
         print('Please, check out configuration file: <{}> and run me again'.format(CONFIG_FILE))
-    logger.info('###----------SESSION ENDED----------###')
+    LOGGER.info('###----------SESSION ENDED----------###')
+    close_logger(LOGGER)
 
+
+if __name__ == '__main__':
+    main()

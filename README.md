@@ -36,7 +36,15 @@ This folder should be named after an 'UploadPath' configuration option value, by
 You can add this command to Cron, Windows Task Scheduler or other similar job scheduler in your OS if you like. Do not forget to use module's full path though.
 
 ## Running the tests
-no tests added yet :-(
+Only main loop tests created. To run from shell use:
+```
+py.test
+```
+
+Install pytest in your virtual environment if not installed:
+```
+pip install pytest
+```
 
 ## License
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details

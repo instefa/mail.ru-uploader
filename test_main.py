@@ -17,11 +17,7 @@ import os
 import pytest
 import shutil
 import os.path
-from uuid import uuid1
-
-
-def get_unique_string():
-    return uuid1().urn[9:]
+from conftest import get_unique_string
 
 
 @pytest.fixture(scope='function')
@@ -74,13 +70,17 @@ UploadPath : {}
 [Behaviour]
 MoveUploaded : yes
 RemoveUploaded : yes
-ArchiveFiles : yes
+ArchiveFiles : no
 RemoveFolders: yes""".format(uploaded_dir, upload_dir))
     monkeypatch.setattr('upload.IS_CONFIG_PRESENT', True)
     monkeypatch.setattr('upload.CONFIG_FILE', config_file)
     monkeypatch.setattr('upload.UPLOAD_PATH', upload_dir)
     monkeypatch.setattr('upload.UPLOADED_PATH', uploaded_dir)
-    monkeypatch.setattr('upload.MOVE_UPLOADED', True)
+    # setup uploader behaviour here to test desired combination (default: True, True, False, True)
+    monkeypatch.setattr('upload.ARCHIVE_FILES', True)
+    monkeypatch.setattr('upload.REMOVE_UPLOADED', True)
+    monkeypatch.setattr('upload.MOVE_UPLOADED', False)
+    monkeypatch.setattr('upload.REMOVE_FOLDERS', True)
     # faking cloud functions responses
     def cloud_auth(session, login=None, password=None):
         return True
@@ -109,7 +109,7 @@ RemoveFolders: yes""".format(uploaded_dir, upload_dir))
     def upload_teardown():
         shutil.rmtree(upload_dir)
         os.unlink(config_file)
-        shutil.rmtree(uploaded_dir)
+        shutil.rmtree(uploaded_dir, ignore_errors=True)
         os.unlink(log_file)
     request.addfinalizer(upload_teardown)
 

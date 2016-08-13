@@ -37,7 +37,12 @@ This folder should be named after an 'UploadPath' configuration option value, by
 
 You can add this command to Cron, Windows Task Scheduler or other similar job scheduler in your OS if you like. Do not forget to use module's full path though.
 
-## Running the tests
+## Running the tests (coverage: 77%)
+Install pytest in your virtual environment if not installed:
+```
+pip install pytest
+```
+
 To run tests from shell use:
 ```
 py.test
@@ -48,9 +53,14 @@ Provide email credentials if configuration file is not ok:
 py.test --email=your_email@mail.ru --password=your_password
 ```
 
-Install pytest in your virtual environment if not installed:
+Pass --runweb option to run cloud related tests
 ```
-pip install pytest
+py.test --runweb
+```
+
+Pass --rundirty option to run cloud related tests which will leave some data in the cloud's recycle bin
+```
+py.test --rundirty
 ```
 
 ## License

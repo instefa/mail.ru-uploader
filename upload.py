@@ -82,7 +82,6 @@ TIME_AMEND = '0246' # '0246', exact meaning has not been quite sorted out yet
 CLOUD_CONFLICT = 'strict' # 'strict' - should remain constant at least until 'rename' implementation
 MAX_FILE_SIZE = 2*1024*1024*1024 # 2*1024*1024*1024 (bytes ~ 2 GB), API constraint
 FILES_TO_PRESERVE = ('application/zip', ) # do not archive already zipped files
-QUOTED_LOGIN = quote_plus(LOGIN) # just for convenience
 DEFAULT_FILETYPE = 'text/plain' # 'text/plain' is good option
 # do not upload this files (only for module's directory)
 FILES_TO_SKIP = set((os.path.basename(CONFIG_FILE), os.path.basename(LOG_FILE)))
@@ -120,7 +119,7 @@ def get_logger(name, log_file=LOG_FILE):
 
 
 def get_email_domain(email=LOGIN):
-    assert EMAIL_REGEXP.match(email), 'bad email provided'
+    assert EMAIL_REGEXP.match(email), 'bad email provided: {}'.format(email)
     return email.split('@')[1]
 
 
@@ -145,7 +144,9 @@ def get_csrf(session):
     r = session.get(urljoin(CLOUD_URL, 'tokens/csrf'), verify = VERIFY_SSL)
     if r.status_code == requests.codes.ok:
         r_json = r.json()
-        return r_json['body']['token']
+        token = r_json['body']['token']
+        assert len(token) == 32, 'invalid CSRF token <{}> lentgh'.format(token)
+        return token
     elif LOGGER:
         LOGGER.error('CSRF token request error. Check your connection and credentials settings in {}. \
 HTTP code: {}, msg: {}'.format(CONFIG_FILE, r.status_code, r.text))
@@ -153,7 +154,11 @@ HTTP code: {}, msg: {}'.format(CONFIG_FILE, r.status_code, r.text))
 
 
 def get_upload_domain(session, csrf=''):
-    """ return current cloud's upload domain url """
+    """ return current cloud's upload domain url
+    it seems that csrf isn't necessary in session,
+    but forcing assert anyway to avoid possible future damage
+    """
+    assert csrf is not None, 'no CSRF' 
     url = urljoin(CLOUD_URL, 'dispatcher?token=' + csrf)
     r = session.get(url, verify = VERIFY_SSL)
     if r.status_code == requests.codes.ok:
@@ -171,13 +176,14 @@ def get_cloud_csrf(session):
     return None
 
 
-def get_cloud_space(session, csrf=''):
+def get_cloud_space(session, csrf='', login=LOGIN):
     """ returns available free space in bytes """
-    assert csrf is not None, 'No CSRF token'
+    assert csrf is not None, 'no CSRF'
 
     timestamp = str(int(time.mktime(datetime.datetime.now().timetuple())* 1000))
-    command = ('user/space?api=' + str(API_VER) + '&email=' + QUOTED_LOGIN +
-               '&x-email=' + QUOTED_LOGIN + '&token=' + csrf + '&_=' + timestamp)
+    quoted_login = quote_plus(login)
+    command = ('user/space?api=' + str(API_VER) + '&email=' + quoted_login +
+               '&x-email=' + quoted_login + '&token=' + csrf + '&_=' + timestamp)
     url = urljoin(CLOUD_URL, command)
 
     r = session.get(url, verify = VERIFY_SSL)
@@ -191,22 +197,23 @@ def get_cloud_space(session, csrf=''):
 HTTP code: {}, msg: {}'.format(r.status_code, r.text))
     return 0
 
-def post_file(session, domain='', file=''):
+def post_file(session, domain='', file='', login=LOGIN):
     """ posts file to the cloud's upload server
     param: file - string filename with path
     """
-    assert domain is not None, 'No domain to upload provided'
-    assert file is not None, 'No file to upload provided'
+    assert domain is not None, 'no domain'
+    assert file is not None, 'no file'
 
     filetype = guess_type(file)[0]
     if not filetype:
         filetype = DEFAULT_FILETYPE
         if LOGGER:
-            LOGGER.warning('File {} type unknown, using default: {}'.format(file, DEFAULT_FILETYPE))
+            LOGGER.warning('File {} type is unknown, using default: {}'.format(file, DEFAULT_FILETYPE))
 
     filename = os.path.basename(file)
+    quoted_login = quote_plus(login)
     timestamp = str(int(time.mktime(datetime.datetime.now().timetuple()))) + TIME_AMEND
-    url = urljoin(domain, '?cloud_domain=' + str(CLOUD_DOMAIN_ORD) + '&x-email=' + QUOTED_LOGIN + '&fileapi' + timestamp)
+    url = urljoin(domain, '?cloud_domain=' + str(CLOUD_DOMAIN_ORD) + '&x-email=' + quoted_login + '&fileapi' + timestamp)
     m = MultipartEncoder(fields={'file': (quote_plus(filename), open(file, 'rb'), filetype)})
 
     r = session.post(url, data=m, headers={'Content-Type': m.content_type}, verify = VERIFY_SSL)
@@ -222,39 +229,24 @@ def post_file(session, domain='', file=''):
     return (None, None)
 
 
-def add_file(session, file='', hash='', size=0, csrf=''):
-    """ 'file' should be filename with absolute cloud path """
-    assert file is not None, 'No file to upload passed'
-    assert len(hash) == 40, 'No hash passed'
-    assert size > 0, 'No size passed'
-    assert csrf is not None, 'No CSRF token passed'
-
-    url = urljoin(CLOUD_URL, 'file/add')
-    # api, email, x-email, x-page-id (not implemented), build (not implemented) - optional parameters
-    postdata = {'home': file, 'hash': hash, 'size': size, 'conflict': CLOUD_CONFLICT, 'token': csrf,
-                'api': API_VER, 'email':LOGIN, 'x-email': LOGIN}
-
-    r = session.post(url, data=postdata, headers={'Content-Type': 'application/x-www-form-urlencoded'}, verify=VERIFY_SSL)
-    if r.status_code == requests.codes.ok:
-        return True
-    elif LOGGER:
-        LOGGER.error('File {} addition error, http code: {}, msg: {}'.format(file, r.status_code, r.text))
-    return None
-
-
-def create_folder(session, folder='', csrf=''):
-    """ Takes 'folder' as new folder name with full cloud path (without 'home'),
-    returns True even if target folder already existed
-    Path should start with forward slash,
-    no final slash should be present after the target folder name
+def make_post(session, obj='', csrf='', command='', params = None):
+    """ invokes standart cloud post operation
+    tested operations: ('file/add', 'folder/add', 'file/remove')
+    does not replace existent objects, but logs them
     """
-    assert folder is not None, 'No folder path provided'
-    assert csrf is not None, 'No CSRF provided'
-    url = urljoin(CLOUD_URL, 'folder/add')
-    # api, email, x-email, x-page-id (not implemented), build (not implemented) - optional parameters
-    postdata = {'home': folder, 'conflict': CLOUD_CONFLICT, 'token': csrf,
-                'api': API_VER, 'email':LOGIN, 'x-email': LOGIN}
+    assert obj is not None, 'no object'
+    assert csrf is not None, 'no CSRF'
+    assert command is not None, 'no command'
+
+    url = urljoin(CLOUD_URL, command)
+    # api (implemented), email, x-email, x-page-id, build - optional parameters
+    postdata = {'home': obj, 'conflict': CLOUD_CONFLICT, 'token': csrf, 'api': API_VER}
+    if params:
+        assert isinstance(params, dict), 'additional parameters not in dictionary'
+        postdata.update(params)
+
     r = session.post(url, data=postdata, headers={'Content-Type': 'application/x-www-form-urlencoded'}, verify=VERIFY_SSL)
+
     if r.status_code == requests.codes.ok:
         return True
     elif r.status_code == requests.codes.bad:
@@ -264,13 +256,36 @@ def create_folder(session, folder='', csrf=''):
             r_error = None
         if r_error == 'exists':
             if LOGGER:
-                LOGGER.warning('Folder {} already exists'.format(folder))
+                LOGGER.warning('Command {} failed. Object {} already exists'.format(command, obj))
             return True
-        elif LOGGER:
-            LOGGER.error('Folder {} creating failed, http code 400, error: {}'.format(folder, r_error))
-    elif LOGGER:
-        LOGGER.error('Folder {} creating error, http code: {}, msg: {}'.format(folder, r.status_code, r.text))
+    if LOGGER:
+        LOGGER.error('Command {} on object {} failed. HTTP code: {}, msg: {}'.format(command, obj, r.status_code, r.text))
     return None
+
+
+def add_file(session, file='', hash='', size=0, csrf=''):
+    """ 'file' should be filename with absolute cloud path """
+    assert len(hash) == 40, 'invalid hash: {}'.format(hash)
+    assert size >= 0, 'invalid size: {}'.format(size)
+
+    return make_post(session, obj=file, csrf=csrf, command='file/add', params = {'hash': hash, 'size': size})
+
+
+def create_folder(session, folder='', csrf=''):
+    """ Takes 'folder' as new folder name with full cloud path (without 'home'),
+    returns True even if target folder already existed
+    Path should start with forward slash,
+    no final slash should be present after the target folder name
+    """
+    return make_post(session, obj=folder, csrf=csrf, command='folder/add')
+
+
+def remove_object(session, obj='', csrf=''):
+    """ moves a file or a folder to the cloud's recycle bin
+    at his time utilized in testing only
+    example call: remove_object(session, obj='/backups/test.txt', csrf='8q3q6wUF3HLVZReni3SGna5vHsbgtDEx')
+    """
+    return make_post(session, obj=obj, csrf=csrf, command='file/remove')
 
 
 def zip_file(file):
@@ -407,7 +422,7 @@ def main():
                             # uploading files
                             for file in get_dir_files(path=folder, space=get_cloud_space(s, csrf=cloud_csrf)):
                                 hash, size = post_file(s, domain=upload_domain, file=file)
-                                if size and hash:
+                                if size>=0 and hash:
                                     LOGGER.info('File {} successfully posted'.format(file))
                                     cloud_file = cloud_path + '/' + os.path.basename(file)
                                     if add_file(s, file=cloud_file, hash=hash, size=size, csrf=cloud_csrf):
@@ -438,7 +453,7 @@ def main():
             print('{} file(s) uploaded. Errors: {}. Warnings: {}. See {} for details.'.format(uploaded_num, LOGGER.error.calls,
                                                                                               LOGGER.warning.calls, LOG_FILE))
         else:
-            LOGGER.critical('Bad email (login). Check credentials settings in {}'.format(CONFIG_FILE))
+            LOGGER.critical('Bad email: (). Check credentials settings in {}'.format(LOGIN, CONFIG_FILE))
     else:
         # creating a default config if local configuration does not exists
         config['Credentials'] = {'Email': LOGIN, 'Password': PASSWORD}

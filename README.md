@@ -19,6 +19,8 @@ pip install requests requests-toolbelt
 On Windows NT systems you could also use pre-built version of the uploader with no prerequisities at all.
 Just run the executable by double clicking it or from command line.
 
+Please make sure that your have read/write permissions to the module's root folder, the upload/uploaded folders and the cloud
+
 ### Installing and Using
 
 No installation is necessary.
@@ -36,9 +38,14 @@ This folder should be named after an 'UploadPath' configuration option value, by
 You can add this command to Cron, Windows Task Scheduler or other similar job scheduler in your OS if you like. Do not forget to use module's full path though.
 
 ## Running the tests
-Only main loop tests created. To run from shell use:
+To run tests from shell use:
 ```
 py.test
+```
+
+Provide email credentials if configuration file is not ok:
+```
+py.test --email=your_email@mail.ru --password=your_password
 ```
 
 Install pytest in your virtual environment if not installed:

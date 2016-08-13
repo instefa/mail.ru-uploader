@@ -8,6 +8,7 @@ Created: 2016-08-12
 testing main app circle
 - no cloud connection required
 - pretending cloud related functions are impeccable and config is ok
+- if main loop crashes with unhandled exception test log file will not be removed
 
 example run (from shell):
 py.test test_main.py
@@ -17,9 +18,6 @@ import pytest
 import shutil
 import os.path
 from uuid import uuid1
-
-#import upload
-#from upload import main
 
 
 def get_unique_string():
@@ -60,7 +58,7 @@ def upload_tearup(request, monkeypatch):
     os.makedirs(dir)
     open(os.path.join(dir, 'l1_2_1.txt'), 'w').close()
     open(os.path.join(dir, 'l1_2_2.txt'), 'w').close()
-    # setting up config (writing file? why? it will not be applied anyway)
+    # setting up config (writing a file? why? it will not be applied anyway)
     config_file = os.path.join('.', 'test_config_' + get_unique_string())
     uploaded_dir = os.path.join('.', 'test_uploaded_' + get_unique_string())
     with open(config_file, 'w') as f:

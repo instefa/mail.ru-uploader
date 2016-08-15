@@ -24,7 +24,7 @@ Please make sure that your have read/write permissions to the module's root fold
 ### Installing and Using
 
 No installation is necessary.
-Just download 'upload.py' file to the place where your directory with files to upload is and than run uploader from shell:
+Just download an 'upload.py' file to the place where your directory with files to upload is and than run the uploader from shell:
 ```
 python -m upload
 ```
@@ -36,8 +36,9 @@ Also you should have a folder with the files to upload in module's directory.
 This folder should be named after an 'UploadPath' configuration option value, by default it is 'upload'.
 
 You can add this command to Cron, Windows Task Scheduler or other similar job scheduler in your OS if you like. Do not forget to use module's full path though.
+Configuration and log files will be always created in the directory you execute your command, which is not necesary the directory where the uploader executable is situated. It means that you can have as many different running configurations as you like with single uploader executable. You should specify executable's working directory in the scheduler's task in this case.
 
-## Running the tests (coverage: 77%)
+## Running the tests (coverage: 70%)
 Install pytest in your virtual environment if not installed:
 ```
 pip install pytest

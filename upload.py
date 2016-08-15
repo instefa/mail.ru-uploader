@@ -8,8 +8,7 @@ Created: 2016-08-09
 uploads specified directory contents to mail.ru cloud
 - same name files in the cloud will NOT be replaced (still zipped and posted though)
 - preserves upload directory structure
-- only relative paths were tested at this moment
-- functions are not designed for import
+- functions are not fully designed for import
 
 requirements (Python 3.5):
 pip install requests requests-toolbelt
@@ -124,9 +123,15 @@ def get_email_domain(email=LOGIN):
 
 
 def cloud_auth(session, login=LOGIN, password=PASSWORD):
-    r = session.post('https://auth.mail.ru/cgi-bin/auth?lang=ru_RU&from=authpopup',
-                     data = {'Login': login, 'Password': password, 'page': urljoin(CLOUD_URL, '?from=promo'),
-                             'new_auth_form': 1, 'Domain': get_email_domain(login)}, verify = VERIFY_SSL)
+    try:
+        r = session.post('https://auth.mail.ru/cgi-bin/auth?lang=ru_RU&from=authpopup',
+                         data = {'Login': login, 'Password': password, 'page': urljoin(CLOUD_URL, '?from=promo'),
+                                 'new_auth_form': 1, 'Domain': get_email_domain(login)}, verify = VERIFY_SSL)
+    except Exception as e:
+        if LOGGER:
+            LOGGER.error('HTTP request error: {}'.format(e))
+        return None
+
     if r.status_code == requests.codes.ok:
         if LOGIN_CHECK_STRING in r.text:
             return True
@@ -141,7 +146,13 @@ HTTP code: {}, msg: {}'.format(r.status_code, r.text))
 
 
 def get_csrf(session):
-    r = session.get(urljoin(CLOUD_URL, 'tokens/csrf'), verify = VERIFY_SSL)
+    try:
+        r = session.get(urljoin(CLOUD_URL, 'tokens/csrf'), verify = VERIFY_SSL)
+    except Exception as e:
+        if LOGGER:
+            LOGGER.error('HTTP request error: {}'.format(e))
+        return None
+
     if r.status_code == requests.codes.ok:
         r_json = r.json()
         token = r_json['body']['token']
@@ -160,7 +171,14 @@ def get_upload_domain(session, csrf=''):
     """
     assert csrf is not None, 'no CSRF' 
     url = urljoin(CLOUD_URL, 'dispatcher?token=' + csrf)
-    r = session.get(url, verify = VERIFY_SSL)
+
+    try:
+        r = session.get(url, verify = VERIFY_SSL)
+    except Exception as e:
+        if LOGGER:
+            LOGGER.error('HTTP request error: {}'.format(e))
+        return None
+
     if r.status_code == requests.codes.ok:
         r_json = r.json()
         return r_json['body']['upload'][0]['url']
@@ -186,7 +204,13 @@ def get_cloud_space(session, csrf='', login=LOGIN):
                '&x-email=' + quoted_login + '&token=' + csrf + '&_=' + timestamp)
     url = urljoin(CLOUD_URL, command)
 
-    r = session.get(url, verify = VERIFY_SSL)
+    try:
+        r = session.get(url, verify = VERIFY_SSL)
+    except Exception as e:
+        if LOGGER:
+            LOGGER.error('HTTP request error: {}'.format(e))
+        return 0
+
     if r.status_code == requests.codes.ok:
         r_json = r.json()
         total_bytes = r_json['body']['total'] * 1024 * 1024
@@ -216,7 +240,13 @@ def post_file(session, domain='', file='', login=LOGIN):
     url = urljoin(domain, '?cloud_domain=' + str(CLOUD_DOMAIN_ORD) + '&x-email=' + quoted_login + '&fileapi' + timestamp)
     m = MultipartEncoder(fields={'file': (quote_plus(filename), open(file, 'rb'), filetype)})
 
-    r = session.post(url, data=m, headers={'Content-Type': m.content_type}, verify = VERIFY_SSL)
+    try:
+        r = session.post(url, data=m, headers={'Content-Type': m.content_type}, verify = VERIFY_SSL)
+    except Exception as e:
+        if LOGGER:
+            LOGGER.error('HTTP request error: {}'.format(e))
+        return (None, None)
+
     if r.status_code == requests.codes.ok:
         if len(r.content):
             hash = r.content[:40].decode()
@@ -245,7 +275,12 @@ def make_post(session, obj='', csrf='', command='', params = None):
         assert isinstance(params, dict), 'additional parameters not in dictionary'
         postdata.update(params)
 
-    r = session.post(url, data=postdata, headers={'Content-Type': 'application/x-www-form-urlencoded'}, verify=VERIFY_SSL)
+    try:
+        r = session.post(url, data=postdata, headers={'Content-Type': 'application/x-www-form-urlencoded'}, verify=VERIFY_SSL)
+    except Exception as e:
+        if LOGGER:
+            LOGGER.error('HTTP request error: {}'.format(e))
+        return None
 
     if r.status_code == requests.codes.ok:
         return True

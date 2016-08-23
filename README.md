@@ -38,6 +38,8 @@ This folder should be named after an 'UploadPath' configuration option value, by
 You can add this command to Cron, Windows Task Scheduler or other similar job scheduler in your OS if you like. Do not forget to use module's full path though.
 Configuration and log files will be always created in the directory you execute your command, which is not necesary the directory where the uploader executable is situated. It means that you can have as many different running configurations as you like with single uploader executable. You should specify executable's working directory in the scheduler's task in this case.
 
+Be aware that the cloud uses its own archiving system. Which means that when later you download your files from it they could be zipped twice.
+
 ## Running the tests (coverage: 70%)
 Install pytest in your virtual environment if not installed:
 ```

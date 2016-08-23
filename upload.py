@@ -325,14 +325,13 @@ def remove_object(session, obj='', csrf=''):
 
 def zip_file(file):
     """ creates compressed zip files with same name and 'zip' extension
-    on success deletes original file
+    on success removes original file
     on failure returns original file
     replaces existing archives
     param: file - filename with path (string)
     """
     file_path, file_name = os.path.split(file)
-    file_root, file_ext = os.path.splitext(file_name)
-    zip_name = file_root + '.zip'
+    zip_name = file_name + '.zip'
     compression = zipfile.ZIP_DEFLATED
     try:
         zf = zipfile.ZipFile(os.path.join(file_path, zip_name), mode='w')
@@ -342,7 +341,7 @@ def zip_file(file):
     except Exception as e:
         zip_name = file_name
         if LOGGER:
-            LOGGER.error('Failed to archive {}, error:'.format(file, e))
+            LOGGER.error('Failed to archive {}, error: {}'.format(file, e))
     else:
         os.unlink(file)
         if LOGGER:

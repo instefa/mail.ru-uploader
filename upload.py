@@ -416,90 +416,98 @@ def main():
     # setting up global logger
     global LOGGER
     LOGGER = get_logger(__name__, log_file=LOG_FILE)
-    if IS_FROZEN:
-        # do not upload self, skip exe file with dependencies
-        FILES_TO_SKIP.add(os.path.basename(sys.executable))
-        # supplying ca certificate for https
-        # cacert file should be in module's directory
-        # for cx_Freeze
-        #cacert = os.path.join(os.path.dirname(sys.executable), CACERT_FILE)
-        # for PyInstaller
-        cacert = resource_path(CACERT_FILE)
-    else:
-        # provide CA cert (not necessary)
-        cacert = requests.certs.where()
-        # do not upload self, skip module's file
-        try:
-            self_file = os.path.basename(os.path.abspath(sys.modules['__main__'].__file__))
-        except:
-            LOGGER.warning('Cannot get self file name.')
+    # global (almost) Exception handler
+    try:
+        if IS_FROZEN:
+            # do not upload self, skip exe file with dependencies
+            FILES_TO_SKIP.add(os.path.basename(sys.executable))
+            # supplying ca certificate for https
+            # cacert file should be in module's directory
+            # for cx_Freeze
+            #cacert = os.path.join(os.path.dirname(sys.executable), CACERT_FILE)
+            # for PyInstaller
+            cacert = resource_path(CACERT_FILE)
         else:
-            FILES_TO_SKIP.add(self_file)
-    assert os.path.isfile(cacert), 'Fatal Error. CA certificate not found.'
-    os.environ["REQUESTS_CA_BUNDLE"] = cacert
-    # some day this conditional mess should be replaced with class
-    # cloud credentials should be in the configuration file
-    if IS_CONFIG_PRESENT:
-        # email (login) check
-        if EMAIL_REGEXP.match(LOGIN):
-            # preparing to upload
-            uploaded_files = set()
-            with requests.Session() as s:
-                cloud_csrf = get_cloud_csrf(s)
-                if cloud_csrf:
-                    upload_domain = get_upload_domain(s, csrf=cloud_csrf)
-                    if upload_domain and os.path.isdir(UPLOAD_PATH):
-                        for folder, __, __ in list(os.walk(UPLOAD_PATH)):
-                            # cloud dir should exist before uploading
-                            cloud_path = create_cloud_path(folder)
-                            create_folder(s, folder=cloud_path, csrf=cloud_csrf)
-                            # uploading files
-                            for file in get_dir_files(path=folder, space=get_cloud_space(s, csrf=cloud_csrf)):
-                                hash, size = post_file(s, domain=upload_domain, file=file)
-                                if size>=0 and hash:
-                                    LOGGER.info('File {} successfully posted'.format(file))
-                                    cloud_file = cloud_path + '/' + os.path.basename(file)
-                                    if add_file(s, file=cloud_file, hash=hash, size=size, csrf=cloud_csrf):
-                                        LOGGER.info('File {} successfully added'.format(file))
-                                        uploaded_files.add(file)
-            uploaded_num = len(uploaded_files)
-            LOGGER.info('{} file(s) successfully uploaded'.format(uploaded_num))
-            if uploaded_num:
-                if MOVE_UPLOADED:
-                    upload_dir = os.path.abspath(UPLOAD_PATH)
-                    uploaded_dir = os.path.abspath(UPLOADED_PATH)
-                    for file in uploaded_files:
-                        file_dir, file_name  = os.path.split(os.path.abspath(file))
-                        # pretty unreliable way to create path
-                        file_new_dir = file_dir.replace(upload_dir, uploaded_dir, 1)
-                        os.makedirs(file_new_dir, exist_ok=True)
-                        move(file, os.path.join(file_new_dir, file_name))
-                        LOGGER.info('file {} moved to {}'.format(file, file_new_dir))
-                elif REMOVE_UPLOADED:
-                    for file in uploaded_files:
-                        os.unlink(file)
-                        LOGGER.info('file {} removed'.format(file))
-                if REMOVE_FOLDERS and (MOVE_UPLOADED or REMOVE_UPLOADED):
-                    for folder, __, __ in list(os.walk(UPLOAD_PATH, topdown=False)):
-                        if folder != UPLOAD_PATH and not os.listdir(folder):
-                            os.rmdir(folder)
-                            LOGGER.info('Empty directory {} deleted'.format(folder))
-            print('{} file(s) uploaded. Errors: {}. Warnings: {}. See {} for details.'.format(uploaded_num, LOGGER.error.calls,
-                                                                                              LOGGER.warning.calls, LOG_FILE))
+            # provide CA cert (not necessary)
+            cacert = requests.certs.where()
+            # do not upload self, skip module's file
+            try:
+                self_file = os.path.basename(os.path.abspath(sys.modules['__main__'].__file__))
+            except:
+                LOGGER.warning('Cannot get self file name.')
+            else:
+                FILES_TO_SKIP.add(self_file)
+        assert os.path.isfile(cacert), 'Fatal Error. CA certificate not found.'
+        os.environ["REQUESTS_CA_BUNDLE"] = cacert
+        # some day this conditional mess should be replaced with class
+        # cloud credentials should be in the configuration file
+        if IS_CONFIG_PRESENT:
+            # email (login) check
+            if EMAIL_REGEXP.match(LOGIN):
+                # preparing to upload
+                uploaded_files = set()
+                with requests.Session() as s:
+                    cloud_csrf = get_cloud_csrf(s)
+                    if cloud_csrf:
+                        upload_domain = get_upload_domain(s, csrf=cloud_csrf)
+                        if upload_domain and os.path.isdir(UPLOAD_PATH):
+                            for folder, __, __ in list(os.walk(UPLOAD_PATH)):
+                                # cloud dir should exist before uploading
+                                cloud_path = create_cloud_path(folder)
+                                create_folder(s, folder=cloud_path, csrf=cloud_csrf)
+                                # uploading files
+                                try:
+                                    for file in get_dir_files(path=folder, space=get_cloud_space(s, csrf=cloud_csrf)):
+                                        hash, size = post_file(s, domain=upload_domain, file=file)
+                                        if size>=0 and hash:
+                                            LOGGER.info('File {} successfully posted'.format(file))
+                                            cloud_file = cloud_path + '/' + os.path.basename(file)
+                                            if add_file(s, file=cloud_file, hash=hash, size=size, csrf=cloud_csrf):
+                                                LOGGER.info('File {} successfully added'.format(file))
+                                                uploaded_files.add(file)
+                                except:
+                                    LOGGER.error('File upload error:', exc_info=True)
+                                    raise
+                uploaded_num = len(uploaded_files)
+                LOGGER.info('{} file(s) successfully uploaded'.format(uploaded_num))
+                if uploaded_num:
+                    if MOVE_UPLOADED:
+                        upload_dir = os.path.abspath(UPLOAD_PATH)
+                        uploaded_dir = os.path.abspath(UPLOADED_PATH)
+                        for file in uploaded_files:
+                            file_dir, file_name  = os.path.split(os.path.abspath(file))
+                            # pretty unreliable way to create path
+                            file_new_dir = file_dir.replace(upload_dir, uploaded_dir, 1)
+                            os.makedirs(file_new_dir, exist_ok=True)
+                            move(file, os.path.join(file_new_dir, file_name))
+                            LOGGER.info('file {} moved to {}'.format(file, file_new_dir))
+                    elif REMOVE_UPLOADED:
+                        for file in uploaded_files:
+                            os.unlink(file)
+                            LOGGER.info('file {} removed'.format(file))
+                    if REMOVE_FOLDERS and (MOVE_UPLOADED or REMOVE_UPLOADED):
+                        for folder, __, __ in list(os.walk(UPLOAD_PATH, topdown=False)):
+                            if folder != UPLOAD_PATH and not os.listdir(folder):
+                                os.rmdir(folder)
+                                LOGGER.info('Empty directory {} deleted'.format(folder))
+                print('{} file(s) uploaded. Errors: {}. Warnings: {}. See {} for details.'.format(uploaded_num, LOGGER.error.calls,
+                                                                                                  LOGGER.warning.calls, LOG_FILE))
+            else:
+                LOGGER.critical('Bad email: (). Check credentials settings in {}'.format(LOGIN, CONFIG_FILE))
         else:
-            LOGGER.critical('Bad email: (). Check credentials settings in {}'.format(LOGIN, CONFIG_FILE))
-    else:
-        # creating a default config if local configuration does not exists
-        config['Credentials'] = {'Email': LOGIN, 'Password': PASSWORD}
-        config['Locations'] = {'CloudPath': CLOUD_PATH, 'UploadPath': UPLOAD_PATH, 'UploadedPath': UPLOADED_PATH}
-        config['Behaviour'] = {'ArchiveFiles': get_yes_no(ARCHIVE_FILES),
-                               'MoveUploaded': get_yes_no(MOVE_UPLOADED),
-                               'RemoveUploaded': get_yes_no(REMOVE_UPLOADED),
-                               'RemoveFolders': get_yes_no(REMOVE_FOLDERS)}
-        with open(CONFIG_FILE, mode='w') as f:
-            config.write(f)
-        LOGGER.warning('First run. Creating settings file: <{}>. Fill it out and run module again.'.format(CONFIG_FILE))
-        print('Please, check your settings in <{}>. Then run me again'.format(CONFIG_FILE))
+            # creating a default config if local configuration does not exists
+            config['Credentials'] = {'Email': LOGIN, 'Password': PASSWORD}
+            config['Locations'] = {'CloudPath': CLOUD_PATH, 'UploadPath': UPLOAD_PATH, 'UploadedPath': UPLOADED_PATH}
+            config['Behaviour'] = {'ArchiveFiles': get_yes_no(ARCHIVE_FILES),
+                                   'MoveUploaded': get_yes_no(MOVE_UPLOADED),
+                                   'RemoveUploaded': get_yes_no(REMOVE_UPLOADED),
+                                   'RemoveFolders': get_yes_no(REMOVE_FOLDERS)}
+            with open(CONFIG_FILE, mode='w') as f:
+                config.write(f)
+            LOGGER.warning('First run. Creating settings file: <{}>. Fill it out and run module again.'.format(CONFIG_FILE))
+            print('Please, check your settings in <{}>. Then run me again'.format(CONFIG_FILE))
+    except:
+        LOGGER.error('Uncaught exception:', exc_info=True)
     LOGGER.info('###----------SESSION ENDED----------###')
     close_logger(LOGGER)
 

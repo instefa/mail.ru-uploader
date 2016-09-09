@@ -34,7 +34,7 @@ from requests_toolbelt import MultipartEncoder
 from requests.compat import urljoin, quote_plus
 from logging.handlers import RotatingFileHandler
 
-__version__ = '0.0.4'
+__version__ = '0.0.8'
 
 IS_CONFIG_PRESENT = False # local configuration file presence indicator
 CONFIG_FILE = './.config' # configuration file, will be created on the very first use

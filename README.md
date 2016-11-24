@@ -16,8 +16,9 @@ with modules:
 pip install requests requests-toolbelt
 ```
 
-On Windows NT systems you could also use pre-built version of the uploader with no prerequisities at all.
-Just run the executable by double clicking it or from command line.
+On Windows systems (Windows 7 and above) you could also use pre-built version of the uploader.
+Just install the following prerequisities: [Visual C++ Redistributable for Visual Studio 2015](https://www.microsoft.com/en-us/download/details.aspx?id=48145).
+Then run the executable (mail.ru-uploader.exe) by double-click or from the command line.
 
 Please make sure that your have read/write permissions to the module's root folder, the upload/uploaded folders and the cloud
 

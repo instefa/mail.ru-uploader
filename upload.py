@@ -34,7 +34,7 @@ from requests_toolbelt import MultipartEncoder
 from requests.compat import urljoin, quote_plus
 from logging.handlers import RotatingFileHandler
 
-__version__ = '0.0.4'
+__version__ = '0.0.8'
 
 IS_CONFIG_PRESENT = False # local configuration file presence indicator
 CONFIG_FILE = './.config' # configuration file, will be created on the very first use
@@ -129,7 +129,7 @@ def cloud_auth(session, login=LOGIN, password=PASSWORD):
                                  'new_auth_form': 1, 'Domain': get_email_domain(login)}, verify = VERIFY_SSL)
     except Exception as e:
         if LOGGER:
-            LOGGER.error('HTTP request error: {}'.format(e))
+            LOGGER.error('Cloud auth HTTP request error: {}'.format(e))
         return None
 
     if r.status_code == requests.codes.ok:
@@ -150,7 +150,7 @@ def get_csrf(session):
         r = session.get(urljoin(CLOUD_URL, 'tokens/csrf'), verify = VERIFY_SSL)
     except Exception as e:
         if LOGGER:
-            LOGGER.error('HTTP request error: {}'.format(e))
+            LOGGER.error('Get csrf HTTP request error: {}'.format(e))
         return None
 
     if r.status_code == requests.codes.ok:
@@ -176,7 +176,7 @@ def get_upload_domain(session, csrf=''):
         r = session.get(url, verify = VERIFY_SSL)
     except Exception as e:
         if LOGGER:
-            LOGGER.error('HTTP request error: {}'.format(e))
+            LOGGER.error('Get upload domain HTTP request error: {}'.format(e))
         return None
 
     if r.status_code == requests.codes.ok:
@@ -208,7 +208,7 @@ def get_cloud_space(session, csrf='', login=LOGIN):
         r = session.get(url, verify = VERIFY_SSL)
     except Exception as e:
         if LOGGER:
-            LOGGER.error('HTTP request error: {}'.format(e))
+            LOGGER.error('Get cloud space HTTP request error: {}'.format(e))
         return 0
 
     if r.status_code == requests.codes.ok:
@@ -244,7 +244,7 @@ def post_file(session, domain='', file='', login=LOGIN):
         r = session.post(url, data=m, headers={'Content-Type': m.content_type}, verify = VERIFY_SSL)
     except Exception as e:
         if LOGGER:
-            LOGGER.error('HTTP request error: {}'.format(e))
+            LOGGER.error('Post file HTTP request error: {}'.format(e))
         return (None, None)
 
     if r.status_code == requests.codes.ok:
@@ -279,7 +279,7 @@ def make_post(session, obj='', csrf='', command='', params = None):
         r = session.post(url, data=postdata, headers={'Content-Type': 'application/x-www-form-urlencoded'}, verify=VERIFY_SSL)
     except Exception as e:
         if LOGGER:
-            LOGGER.error('HTTP request error: {}'.format(e))
+            LOGGER.error('Make post ({}) HTTP request error: {}'.format(command, e))
         return None
 
     if r.status_code == requests.codes.ok:
